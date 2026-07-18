@@ -37,6 +37,24 @@ impl CgMode {
     }
 }
 
+#[derive(Clone)]
+pub enum NetworkLockMethod {
+    IPTABLES = 1,
+    NFTABLES = 2,
+    SKIP = 3,
+}
+
+impl NetworkLockMethod {
+    pub fn from(value: i32) -> NetworkLockMethod {
+        match value {
+            1 => Self::IPTABLES,
+            2 => Self::NFTABLES,
+            3 => Self::SKIP,
+            _ => Self::IPTABLES,
+        }
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum CriuError {
     #[error("socketpair failed: {0}")]
@@ -109,6 +127,8 @@ pub struct Criu {
     lazy_pages: Option<bool>,
     page_server: Option<(String, i32)>,
     empty_net_ns: Option<bool>,
+    timeout: Option<u32>,
+    network_lock: Option<NetworkLockMethod>,
 }
 
 impl Criu {
@@ -151,6 +171,8 @@ impl Criu {
             lazy_pages: None,
             page_server: None,
             empty_net_ns: None,
+            timeout: None,
+            network_lock: None,
         })
     }
 
@@ -549,6 +571,19 @@ impl Criu {
         self.empty_net_ns = Some(empty_net_ns);
     }
 
+    /// Abort the dump/restore if it takes longer than this many seconds.
+    /// Also bounds cuda-checkpoint actions run by CRIU's cuda plugin.
+    pub fn set_timeout(&mut self, timeout: u32) {
+        self.timeout = Some(timeout);
+    }
+
+    /// How CRIU blocks network traffic while TCP connections are dumped.
+    /// SKIP is appropriate when every connection endpoint lives inside the
+    /// dumped tree (e.g. loopback-only traffic in a container).
+    pub fn set_network_lock(&mut self, method: NetworkLockMethod) {
+        self.network_lock = Some(method);
+    }
+
     fn fill_criu_opts(&mut self, criu_opts: &mut rpc::Criu_opts) {
         if let Some(pid) = self.pid {
             criu_opts.set_pid(pid);
@@ -694,6 +729,18 @@ impl Criu {
         if let Some(true) = self.empty_net_ns {
             criu_opts.set_empty_ns(libc::CLONE_NEWNET as u32);
         }
+
+        if let Some(timeout) = self.timeout {
+            criu_opts.set_timeout(timeout);
+        }
+
+        if let Some(ref network_lock) = self.network_lock {
+            criu_opts.set_network_lock(match network_lock {
+                NetworkLockMethod::IPTABLES => rpc::Criu_network_lock_method::IPTABLES,
+                NetworkLockMethod::NFTABLES => rpc::Criu_network_lock_method::NFTABLES,
+                NetworkLockMethod::SKIP => rpc::Criu_network_lock_method::SKIP,
+            });
+        }
     }
 
     fn clear(&mut self) {
@@ -727,6 +774,8 @@ impl Criu {
         self.lazy_pages = None;
         self.page_server = None;
         self.empty_net_ns = None;
+        self.timeout = None;
+        self.network_lock = None;
     }
 
     /// Dump (checkpoint) a process.
@@ -832,6 +881,44 @@ mod tests {
         let mut opts = rpc::Criu_opts::default();
         criu.fill_criu_opts(&mut opts);
         assert!(opts.tcp_skip_in_flight());
+    }
+
+    #[test]
+    fn set_timeout_fills_criu_opts() {
+        let mut criu = Criu::new().unwrap();
+        criu.set_timeout(180);
+
+        let mut opts = rpc::Criu_opts::default();
+        criu.fill_criu_opts(&mut opts);
+        assert_eq!(opts.timeout(), 180);
+    }
+
+    #[test]
+    fn timeout_default_not_set() {
+        let mut criu = Criu::new().unwrap();
+
+        let mut opts = rpc::Criu_opts::default();
+        criu.fill_criu_opts(&mut opts);
+        assert!(!opts.has_timeout());
+    }
+
+    #[test]
+    fn set_network_lock_fills_criu_opts() {
+        let mut criu = Criu::new().unwrap();
+        criu.set_network_lock(NetworkLockMethod::SKIP);
+
+        let mut opts = rpc::Criu_opts::default();
+        criu.fill_criu_opts(&mut opts);
+        assert_eq!(opts.network_lock(), rpc::Criu_network_lock_method::SKIP);
+    }
+
+    #[test]
+    fn network_lock_default_not_set() {
+        let mut criu = Criu::new().unwrap();
+
+        let mut opts = rpc::Criu_opts::default();
+        criu.fill_criu_opts(&mut opts);
+        assert!(!opts.has_network_lock());
     }
 
     #[test]
