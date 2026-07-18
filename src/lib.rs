@@ -1,5 +1,10 @@
 pub mod rust_criu_protobuf;
 
+// Stable Linux UAPI value; libc doesn't define CLONE_NEWNET on non-Linux
+// hosts, and using the literal keeps the crate compiling there (useful for
+// consumers whose workspaces are developed on macOS and built for Linux).
+const CLONE_NEWNET: u32 = 0x4000_0000;
+
 use protobuf::{Message, MessageField};
 use rust_criu_protobuf::rpc;
 use rust_criu_protobuf::rpc::Criu_notify;
@@ -735,7 +740,7 @@ impl Criu {
         }
 
         if let Some(true) = self.empty_net_ns {
-            criu_opts.set_empty_ns(libc::CLONE_NEWNET as u32);
+            criu_opts.set_empty_ns(CLONE_NEWNET);
         }
 
         if let Some(timeout) = self.timeout {
@@ -1085,7 +1090,7 @@ mod tests {
 
         let mut opts = rpc::Criu_opts::default();
         criu.fill_criu_opts(&mut opts);
-        assert_eq!(opts.empty_ns(), libc::CLONE_NEWNET as u32);
+        assert_eq!(opts.empty_ns(), CLONE_NEWNET);
     }
 
     #[test]
