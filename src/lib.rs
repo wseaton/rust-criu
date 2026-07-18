@@ -129,6 +129,7 @@ pub struct Criu {
     empty_net_ns: Option<bool>,
     timeout: Option<u32>,
     network_lock: Option<NetworkLockMethod>,
+    tcp_close: Option<bool>,
 }
 
 impl Criu {
@@ -173,6 +174,7 @@ impl Criu {
             empty_net_ns: None,
             timeout: None,
             network_lock: None,
+            tcp_close: None,
         })
     }
 
@@ -584,6 +586,12 @@ impl Criu {
         self.network_lock = Some(method);
     }
 
+    /// Dump established TCP connections and restore them in closed state,
+    /// instead of preserving them (--tcp-close).
+    pub fn set_tcp_close(&mut self, tcp_close: bool) {
+        self.tcp_close = Some(tcp_close);
+    }
+
     fn fill_criu_opts(&mut self, criu_opts: &mut rpc::Criu_opts) {
         if let Some(pid) = self.pid {
             criu_opts.set_pid(pid);
@@ -734,6 +742,10 @@ impl Criu {
             criu_opts.set_timeout(timeout);
         }
 
+        if let Some(tcp_close) = self.tcp_close {
+            criu_opts.set_tcp_close(tcp_close);
+        }
+
         if let Some(ref network_lock) = self.network_lock {
             criu_opts.set_network_lock(match network_lock {
                 NetworkLockMethod::IPTABLES => rpc::Criu_network_lock_method::IPTABLES,
@@ -776,6 +788,7 @@ impl Criu {
         self.empty_net_ns = None;
         self.timeout = None;
         self.network_lock = None;
+        self.tcp_close = None;
     }
 
     /// Dump (checkpoint) a process.
@@ -891,6 +904,25 @@ mod tests {
         let mut opts = rpc::Criu_opts::default();
         criu.fill_criu_opts(&mut opts);
         assert_eq!(opts.timeout(), 180);
+    }
+
+    #[test]
+    fn set_tcp_close_fills_criu_opts() {
+        let mut criu = Criu::new().unwrap();
+        criu.set_tcp_close(true);
+
+        let mut opts = rpc::Criu_opts::default();
+        criu.fill_criu_opts(&mut opts);
+        assert!(opts.tcp_close());
+    }
+
+    #[test]
+    fn tcp_close_default_not_set() {
+        let mut criu = Criu::new().unwrap();
+
+        let mut opts = rpc::Criu_opts::default();
+        criu.fill_criu_opts(&mut opts);
+        assert!(!opts.has_tcp_close());
     }
 
     #[test]
